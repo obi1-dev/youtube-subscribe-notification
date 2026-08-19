@@ -1,9 +1,18 @@
-import { Hono } from 'hono'
+import { Hono } from "hono";
 
-const app = new Hono()
+type Bindings = {
+	YT_SUBS: KVNamespace;
+	DISCORD_WEBHOOK_URL: string;
+	CALLBACK_BASE_URL: string;
+	HUB_SECRET: string;
+};
 
-app.get('/', (c) => {
-  return c.text('Hello Hono!')
-})
+const HUB_URL = "";
 
-export default app
+const app = new Hono();
+
+app.get("/", (c) => {
+	return c.text("Hello Hono!");
+});
+
+export default app;
