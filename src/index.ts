@@ -14,6 +14,7 @@ type Bindings = {
 const HUB_URL = "https://pubsubhubbub.appspot.com/subscribe";
 const CALLBACK_PATH = "/webhook/youtube";
 const CHANNEL_LIST_KEY = "channel_list";
+const CHANNEL_NAME_KEY_PREFIX = "channel_name:";
 
 const app = new Hono<{ Bindings: Bindings }>();
 app.use(logger());
@@ -99,6 +100,21 @@ app.use("/admin/*", async (c, next) => {
 	return auth(c, next);
 });
 
+app.get("/admin/channels", async (c) => {
+	const list =
+		(await c.env.YT_SUBS.get(CHANNEL_LIST_KEY))?.split(",").filter(Boolean) ??
+		[];
+
+	const channels = await Promise.all(
+		list.map(async (channelId) => ({
+			channelId,
+			channelName: await getChannelName(c.env, channelId),
+		})),
+	);
+
+	return c.json(channels);
+});
+
 app.post("/admin/subscribe/:channelId", async (c) => {
 	const channelId = c.req.param("channelId");
 	await subscribeChannel(c.env, channelId);
@@ -109,6 +125,7 @@ app.post("/admin/subscribe/:channelId", async (c) => {
 	);
 	list.add(channelId);
 	await c.env.YT_SUBS.put(CHANNEL_LIST_KEY, [...list].join(","));
+	await getChannelName(c.env, channelId);
 
 	return c.text(`subscribed: ${channelId}`);
 });
@@ -225,6 +242,39 @@ async function notifyDiscord(
 
 	if (!res.ok) {
 		console.error(`[discord] failed: ${res.status} ${await res.text()}`);
+	}
+}
+
+// ---------------------------------------------------------------------------
+// チャンネル名の取得(YouTubeの動画フィードXMLから、KVにキャッシュ)
+// ---------------------------------------------------------------------------
+async function getChannelName(
+	env: Bindings,
+	channelId: string,
+): Promise<string | null> {
+	const cacheKey = `${CHANNEL_NAME_KEY_PREFIX}${channelId}`;
+	const cached = await env.YT_SUBS.get(cacheKey);
+	if (cached) return cached;
+
+	const name = await fetchChannelName(channelId);
+	if (name) {
+		await env.YT_SUBS.put(cacheKey, name);
+	}
+	return name;
+}
+
+async function fetchChannelName(channelId: string): Promise<string | null> {
+	try {
+		const res = await fetch(topicUrl(channelId));
+		if (!res.ok) return null;
+
+		const parser = new XMLParser();
+		const doc = parser.parse(await res.text());
+		const title = doc?.feed?.title;
+		return typeof title === "string" && title ? title : null;
+	} catch (err) {
+		console.error(`[channel-name] failed to fetch for ${channelId}:`, err);
+		return null;
 	}
 }
 
