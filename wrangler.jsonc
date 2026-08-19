@@ -18,5 +18,11 @@
 			"custom_domain": true,
 			"pattern": "yt.obi1.dev"
 		}
-	]
+	],
+	"observability": {
+		"enabled": true,
+		"traces": {
+			"enabled": true
+		}
+	}
 }
