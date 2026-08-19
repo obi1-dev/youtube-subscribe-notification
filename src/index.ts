@@ -265,7 +265,11 @@ async function getChannelName(
 
 async function fetchChannelName(channelId: string): Promise<string | null> {
 	try {
-		const res = await fetch(topicUrl(channelId));
+		// topicUrl() はハブ用の静的なトピック記述ファイルで、
+		// <title>が常に "YouTube video feed" 固定なのでチャンネル名の取得には使えない
+		const res = await fetch(
+			`https://www.youtube.com/feeds/videos.xml?channel_id=${channelId}`,
+		);
 		if (!res.ok) return null;
 
 		const parser = new XMLParser();
