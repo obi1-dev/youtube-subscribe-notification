@@ -3,36 +3,20 @@
 	"name": "youtube-subscribe-notification",
 	"main": "src/index.ts",
 	"compatibility_date": "2026-08-19",
-	"compatibility_flags": [
-		"nodejs_compat"
-	],
-	// "vars": {
-	//   "MY_VAR": "my-variable"
-	// },
+	"compatibility_flags": ["nodejs_compat"],
 	"kv_namespaces": [
 		{
 			"binding": "YT_SUBS",
 			"id": "2e02e12b66034485a73149285a9f7deb"
 		}
+	],
+	"triggers": {
+		"crons": ["0 */3 * * *"]
+	},
+	"routes": [
+		{
+			"custom_domain": true,
+			"pattern": "yt.obi1.dev"
+		}
 	]
-	// "r2_buckets": [
-	//   {
-	//     "binding": "MY_BUCKET",
-	//     "bucket_name": "my-bucket"
-	//   }
-	// ],
-	// "d1_databases": [
-	//   {
-	//     "binding": "MY_DB",
-	//     "database_name": "my-database",
-	//     "database_id": ""
-	//   }
-	// ],
-	// "ai": {
-	//   "binding": "AI"
-	// },
-	// "observability": {
-	//   "enabled": true,
-	//   "head_sampling_rate": 1
-	// }
 }
