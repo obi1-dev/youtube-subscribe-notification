@@ -1,6 +1,7 @@
 import { XMLParser } from "fast-xml-parser";
 import { Hono } from "hono";
 import { bearerAuth } from "hono/bearer-auth";
+import { logger } from "hono/logger";
 
 type Bindings = {
 	YT_SUBS: KVNamespace;
@@ -15,6 +16,7 @@ const CALLBACK_PATH = "/webhook/youtube";
 const CHANNEL_LIST_KEY = "channel_list";
 
 const app = new Hono<{ Bindings: Bindings }>();
+app.use(logger());
 
 function topicUrl(channelId: string) {
 	return `https://www.youtube.com/xml/feeds/videos.xml?channel_id=${channelId}`;
