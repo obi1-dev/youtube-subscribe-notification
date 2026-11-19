@@ -2,6 +2,7 @@ import { XMLParser } from "fast-xml-parser";
 import { Hono } from "hono";
 import { bearerAuth } from "hono/bearer-auth";
 import { logger } from "hono/logger";
+import { managePage } from "./manage";
 
 type Bindings = {
 	YT_SUBS: KVNamespace;
@@ -144,6 +145,71 @@ app.post("/admin/unsubscribe/:channelId", async (c) => {
 	return c.text(`unsubscribed: ${channelId}`);
 });
 
+// /manage/ は Cloudflare Access による保護を前提とする。
+app.get("/manage", (c) => c.redirect("/manage/"));
+app.get("/manage/", async (c) => {
+	const list =
+		(await c.env.YT_SUBS.get(CHANNEL_LIST_KEY))?.split(",").filter(Boolean) ??
+		[];
+	const channels = await Promise.all(
+		list.map(async (channelId) => ({
+			channelId,
+			channelName: await getChannelName(c.env, channelId),
+		})),
+	);
+	const messages: Record<string, string> = {
+		added: "購読リクエストを送信しました。",
+		removed: "購読解除リクエストを送信しました。",
+		invalid: "正しいチャンネル ID を入力してください。",
+		failed:
+			"ハブへのリクエストに失敗しました。時間をおいて再度お試しください。",
+	};
+	const status = c.req.query("status") ?? "";
+	c.header("Cache-Control", "no-store");
+	return c.html(
+		managePage(
+			channels,
+			messages[status],
+			status === "invalid" || status === "failed",
+		),
+	);
+});
+
+app.post("/manage/:action", async (c) => {
+	// Cookie を使う Access セッションに対するクロスサイト送信を防ぐ。
+	if (c.req.header("Origin") !== new URL(c.req.url).origin)
+		return c.text("Forbidden", 403);
+	const action = c.req.param("action");
+	if (action !== "subscribe" && action !== "unsubscribe") return c.notFound();
+	const body = await c.req.parseBody();
+	const channelId =
+		typeof body.channelId === "string" ? body.channelId.trim() : "";
+	if (!/^UC[A-Za-z0-9_-]{22}$/.test(channelId))
+		return c.redirect("/manage/?status=invalid", 303);
+	try {
+		const list = new Set(
+			(await c.env.YT_SUBS.get(CHANNEL_LIST_KEY))?.split(",").filter(Boolean) ??
+				[],
+		);
+		if (action === "subscribe") {
+			await subscribeChannel(c.env, channelId);
+			list.add(channelId);
+		} else {
+			await unsubscribeChannel(c.env, channelId);
+			list.delete(channelId);
+		}
+		await c.env.YT_SUBS.put(CHANNEL_LIST_KEY, [...list].join(","));
+		if (action === "subscribe") await getChannelName(c.env, channelId);
+		return c.redirect(
+			`/manage/?status=${action === "subscribe" ? "added" : "removed"}`,
+			303,
+		);
+	} catch (error) {
+		console.error("[manage] request failed", error);
+		return c.redirect("/manage/?status=failed", 303);
+	}
+});
+
 // ---------------------------------------------------------------------------
 // XMLパース(fast-xml-parserはWorkers環境でも依存なしで動く)
 // ---------------------------------------------------------------------------
@@ -157,33 +223,49 @@ type FeedEntry = {
 	updated?: string;
 };
 
+type XmlRecord = Record<string, unknown>;
+
+function isXmlRecord(value: unknown): value is XmlRecord {
+	return typeof value === "object" && value !== null;
+}
+
+function stringValue(value: unknown): string | undefined {
+	return typeof value === "string" ? value : undefined;
+}
+
 function parseEntries(xml: string): FeedEntry[] {
 	const parser = new XMLParser({
 		ignoreAttributes: false,
 		attributeNamePrefix: "@_",
 	});
-	const doc = parser.parse(xml);
+	const doc: unknown = parser.parse(xml);
+	if (!isXmlRecord(doc) || !isXmlRecord(doc.feed)) return [];
 
-	const feed = doc?.feed;
-	if (!feed) return [];
-
-	const rawEntries = feed.entry
-		? Array.isArray(feed.entry)
-			? feed.entry
-			: [feed.entry]
+	const rawEntries = doc.feed.entry
+		? Array.isArray(doc.feed.entry)
+			? doc.feed.entry
+			: [doc.feed.entry]
 		: [];
 
-	return rawEntries.map((e: any) => ({
-		videoId: e["yt:videoId"] ?? "",
-		channelId: e["yt:channelId"] ?? "",
-		title: e.title ?? "",
-		author: e.author?.name ?? "",
-		link:
-			e.link?.["@_href"] ??
-			`https://www.youtube.com/watch?v=${e["yt:videoId"] ?? ""}`,
-		published: e.published,
-		updated: e.updated,
-	}));
+	return rawEntries.filter(isXmlRecord).map((entry) => {
+		const videoId = stringValue(entry["yt:videoId"]) ?? "";
+		const author = isXmlRecord(entry.author)
+			? (stringValue(entry.author.name) ?? "")
+			: "";
+		const link = isXmlRecord(entry.link)
+			? stringValue(entry.link["@_href"])
+			: undefined;
+
+		return {
+			videoId,
+			channelId: stringValue(entry["yt:channelId"]) ?? "",
+			title: stringValue(entry.title) ?? "",
+			author,
+			link: link ?? `https://www.youtube.com/watch?v=${videoId}`,
+			published: stringValue(entry.published),
+			updated: stringValue(entry.updated),
+		};
+	});
 }
 
 // ---------------------------------------------------------------------------
@@ -301,9 +383,7 @@ async function subscribeChannel(env: Bindings, channelId: string) {
 	});
 
 	if (!res.ok) {
-		console.error(
-			`[subscribe] failed for ${channelId}: ${res.status} ${await res.text()}`,
-		);
+		throw new Error(`[subscribe] failed for ${channelId}: ${res.status}`);
 	} else {
 		console.log(`[subscribe] requested for ${channelId}`);
 	}
@@ -316,11 +396,13 @@ async function unsubscribeChannel(env: Bindings, channelId: string) {
 		"hub.callback": `${env.CALLBACK_BASE_URL}${CALLBACK_PATH}`,
 	});
 
-	await fetch(HUB_URL, {
+	const res = await fetch(HUB_URL, {
 		method: "POST",
 		headers: { "Content-Type": "application/x-www-form-urlencoded" },
 		body: params.toString(),
 	});
+	if (!res.ok)
+		throw new Error(`[unsubscribe] failed for ${channelId}: ${res.status}`);
 }
 
 // ---------------------------------------------------------------------------
