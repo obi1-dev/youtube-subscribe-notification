@@ -12,8 +12,15 @@
 			"id": "2e02e12b66034485a73149285a9f7deb"
 		}
 	],
+	"secrets_store_secrets": [
+		{
+			"binding": "YOUTUBE_DATA_API_KEY",
+			"store_id": "dd5dbc2750ac41b393d0e79928aae64a",
+			"secret_name": "YOUTUBE_DATA_API_KEY"
+		}
+	],
 	"triggers": {
-		"crons": ["0 */3 * * *"]
+		"crons": ["0 */3 * * *", "* * * * *"]
 	},
 	"routes": [
 		{
