@@ -22,4 +22,6 @@ pnpm typecheck
 pnpm deploy
 ```
 
-KV と `DISCORD_WEBHOOK_URL`、`CALLBACK_BASE_URL`、`HUB_SECRET`、`ADMIN_TOKEN` の各シークレットを環境に設定してください。`CALLBACK_BASE_URL` は末尾のスラッシュを除いた公開オリジンです。
+KV と `DISCORD_WEBHOOK_URL`、`CALLBACK_BASE_URL`、`HUB_SECRET`、`ADMIN_TOKEN` の各シークレットを環境に設定してください。`CALLBACK_BASE_URL` は末尾のスラッシュを除いた公開オリジンです。YouTube Data API v3 のキーは `wrangler.jsonc` で指定した Secrets Store の `YOUTUBE_DATA_API_KEY` から取得します。Secret には Workers スコープが必要です。
+
+通常動画の投稿、ライブ配信予定、ライブ配信開始を Discord に通知します。タイトルや説明の更新は通知しません。配信予定は1分ごとに確認するため、開始通知には遅延が生じる場合があります。YouTube のプッシュ通知や API の取得状況によっては検知できない場合もあります。チャンネルの購読更新は3時間ごとに行います。

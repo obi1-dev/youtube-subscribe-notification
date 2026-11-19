@@ -2,7 +2,7 @@ import { XMLParser } from "fast-xml-parser";
 import { Hono } from "hono";
 import { bearerAuth } from "hono/bearer-auth";
 import { logger } from "hono/logger";
-import { managePage } from "./manage";
+import { managePage } from "./manage.ts";
 
 type Bindings = {
 	YT_SUBS: KVNamespace;
@@ -10,12 +10,15 @@ type Bindings = {
 	CALLBACK_BASE_URL: string;
 	HUB_SECRET: string;
 	ADMIN_TOKEN: string;
+	YOUTUBE_DATA_API_KEY: { get(): Promise<string> };
 };
 
 const HUB_URL = "https://pubsubhubbub.appspot.com/subscribe";
 const CALLBACK_PATH = "/webhook/youtube";
 const CHANNEL_LIST_KEY = "channel_list";
 const CHANNEL_NAME_KEY_PREFIX = "channel_name:";
+const PENDING_LIVE_KEY_PREFIX = "pending_live:";
+const NOTIFIED_KEY_PREFIX = "notified:";
 
 const app = new Hono<{ Bindings: Bindings }>();
 app.use(logger());
@@ -59,29 +62,7 @@ app.post(CALLBACK_PATH, async (c) => {
 
 	const entries = parseEntries(bodyText);
 
-	for (const entry of entries) {
-		if (!entry.videoId) continue;
-
-		// 同じ通知の重取り(ハブは再送してくることがある)を除外
-		const dedupeKey = `seen:${entry.videoId}:${entry.updated ?? ""}`;
-		const alreadyHandled = await c.env.YT_SUBS.get(dedupeKey);
-		if (alreadyHandled) continue;
-		await c.env.YT_SUBS.put(dedupeKey, "1", {
-			expirationTtl: 60 * 60 * 24 * 14,
-		});
-
-		// published と updated の差が小さければ「新規投稿」、大きければ「編集」とみなす
-		const isNewUpload =
-			entry.published && entry.updated
-				? Math.abs(
-						new Date(entry.updated).getTime() -
-							new Date(entry.published).getTime(),
-					) <
-					5 * 60 * 1000
-				: true;
-
-		await notifyDiscord(c.env.DISCORD_WEBHOOK_URL, entry, isNewUpload);
-	}
+	for (const entry of entries) await handleFeedEntry(c.env, entry);
 
 	return c.text("OK", 200);
 });
@@ -299,21 +280,116 @@ async function verifySignature(
 	);
 }
 
+type YouTubeVideo = {
+	id: string;
+	snippet: {
+		title: string;
+		channelTitle: string;
+		liveBroadcastContent: "live" | "upcoming" | "none";
+	};
+	liveStreamingDetails?: { scheduledStartTime?: string };
+};
+
+type NotificationKind = "video" | "scheduled" | "live";
+
+async function handleFeedEntry(env: Bindings, entry: FeedEntry) {
+	if (!entry.videoId) return;
+	const video = await getYouTubeVideo(env, entry.videoId);
+	if (!video) return;
+
+	if (video.snippet.liveBroadcastContent === "live") {
+		await notifyOnce(env, video, "live");
+		await removePendingLive(env, entry.videoId);
+		return;
+	}
+	if (video.snippet.liveBroadcastContent === "upcoming") {
+		await addPendingLive(env, entry.videoId);
+		await notifyOnce(env, video, "scheduled");
+		return;
+	}
+
+	// 終了済みライブは liveStreamingDetails が残るため、通常動画として通知しない。
+	if (video.liveStreamingDetails) return;
+	// ハブはタイトル・説明の編集でも通知する。初回投稿時の通知だけを送る。
+	if (isInitialPublication(entry)) await notifyOnce(env, video, "video");
+}
+
+function isInitialPublication(entry: FeedEntry) {
+	if (!entry.published || !entry.updated) return true;
+	return (
+		Math.abs(
+			new Date(entry.updated).getTime() - new Date(entry.published).getTime(),
+		) <
+		5 * 60 * 1000
+	);
+}
+
+async function getYouTubeVideo(
+	env: Bindings,
+	videoId: string,
+): Promise<YouTubeVideo | null> {
+	return (await getYouTubeVideos(env, [videoId]))[0] ?? null;
+}
+
+async function getYouTubeVideos(
+	env: Bindings,
+	videoIds: string[],
+): Promise<YouTubeVideo[]> {
+	if (videoIds.length === 0) return [];
+	const apiKey = await env.YOUTUBE_DATA_API_KEY.get();
+	const url = new URL("https://www.googleapis.com/youtube/v3/videos");
+	url.search = new URLSearchParams({
+		part: "snippet,liveStreamingDetails",
+		id: videoIds.join(","),
+		key: apiKey,
+	}).toString();
+	const res = await fetch(url);
+	if (!res.ok) {
+		console.error(`[youtube] failed: ${res.status} ${await res.text()}`);
+		throw new Error(`YouTube Data API failed: ${res.status}`);
+	}
+	const data: { items?: YouTubeVideo[] } = await res.json();
+	return data.items ?? [];
+}
+
+async function notifyOnce(
+	env: Bindings,
+	video: YouTubeVideo,
+	kind: NotificationKind,
+) {
+	const key = `${NOTIFIED_KEY_PREFIX}${kind}:${video.id}`;
+	if (await env.YT_SUBS.get(key)) return;
+	await notifyDiscord(env.DISCORD_WEBHOOK_URL, video, kind);
+	await env.YT_SUBS.put(key, "1", { expirationTtl: 60 * 60 * 24 * 90 });
+}
+
 // ---------------------------------------------------------------------------
 // Discord通知
 // ---------------------------------------------------------------------------
 async function notifyDiscord(
 	webhookUrl: string,
-	entry: FeedEntry,
-	isNewUpload: boolean,
+	video: YouTubeVideo,
+	kind: NotificationKind,
 ) {
+	const labels: Record<
+		NotificationKind,
+		{ description: string; color: number }
+	> = {
+		video: { description: "📹 新着動画", color: 0xff0000 },
+		scheduled: { description: "📅 ライブ配信予定", color: 0x3498db },
+		live: { description: "🔴 ライブ配信中", color: 0xe74c3c },
+	};
+	const label = labels[kind];
 	const embed = {
-		title: entry.title || "(タイトル不明)",
-		url: entry.link,
-		description: isNewUpload ? "📹 新着動画" : "✏️ 動画情報が更新されました",
-		author: { name: entry.author },
-		color: isNewUpload ? 0xff0000 : 0x999999,
-		thumbnail: { url: `https://i.ytimg.com/vi/${entry.videoId}/hqdefault.jpg` },
+		title: video.snippet.title || "(タイトル不明)",
+		url: `https://www.youtube.com/watch?v=${video.id}`,
+		description:
+			kind === "scheduled" && video.liveStreamingDetails?.scheduledStartTime
+				? `${label.description}\n開始予定: <t:${Math.floor(new Date(video.liveStreamingDetails.scheduledStartTime).getTime() / 1000)}:F>`
+				: label.description,
+		author: { name: video.snippet.channelTitle },
+		color: label.color,
+		thumbnail: { url: `https://i.ytimg.com/vi/${video.id}/hqdefault.jpg` },
 	};
 
 	const res = await fetch(webhookUrl, {
@@ -323,8 +399,54 @@ async function notifyDiscord(
 	});
 
 	if (!res.ok) {
-		console.error(`[discord] failed: ${res.status} ${await res.text()}`);
+		const body = await res.text();
+		console.error(`[discord] failed: ${res.status} ${body}`);
+		throw new Error(`Discord webhook failed: ${res.status}`);
 	}
+}
+
+async function addPendingLive(env: Bindings, videoId: string) {
+	await env.YT_SUBS.put(`${PENDING_LIVE_KEY_PREFIX}${videoId}`, "1");
+}
+
+async function removePendingLive(env: Bindings, videoId: string) {
+	await env.YT_SUBS.delete(`${PENDING_LIVE_KEY_PREFIX}${videoId}`);
+}
+
+async function checkPendingLives(env: Bindings) {
+	let cursor: string | undefined;
+	do {
+		const page = await env.YT_SUBS.list({
+			prefix: PENDING_LIVE_KEY_PREFIX,
+			cursor,
+		});
+		for (let start = 0; start < page.keys.length; start += 50) {
+			const videoIds = page.keys
+				.slice(start, start + 50)
+				.map((key) => key.name.slice(PENDING_LIVE_KEY_PREFIX.length));
+			try {
+				const videos = await getYouTubeVideos(env, videoIds);
+				const byId = new Map(videos.map((video) => [video.id, video]));
+				for (const videoId of videoIds) {
+					const video = byId.get(videoId);
+					if (!video || video.snippet.liveBroadcastContent === "none") {
+						await removePendingLive(env, videoId);
+						continue;
+					}
+					if (video.snippet.liveBroadcastContent !== "live") continue;
+					try {
+						await notifyOnce(env, video, "live");
+						await removePendingLive(env, videoId);
+					} catch (error) {
+						console.error(`[live] notification failed for ${videoId}`, error);
+					}
+				}
+			} catch (error) {
+				console.error("[live] status check failed", error);
+			}
+		}
+		cursor = page.list_complete ? undefined : page.cursor;
+	} while (cursor);
 }
 
 // ---------------------------------------------------------------------------
@@ -406,7 +528,7 @@ async function unsubscribeChannel(env: Bindings, channelId: string) {
 }
 
 // ---------------------------------------------------------------------------
-// Cron: リース切れ前に全チャンネルを再購読
+// Cron: 毎分のライブ開始確認と、3時間ごとの購読リース更新
 // ---------------------------------------------------------------------------
 export default {
 	fetch: app.fetch,
@@ -415,6 +537,11 @@ export default {
 		env: Bindings,
 		ctx: ExecutionContext,
 	) {
+		if (_event.cron === "* * * * *") {
+			ctx.waitUntil(checkPendingLives(env));
+			return;
+		}
+
 		const list =
 			(await env.YT_SUBS.get(CHANNEL_LIST_KEY))?.split(",").filter(Boolean) ??
 			[];
