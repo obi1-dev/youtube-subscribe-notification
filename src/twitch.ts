@@ -12,7 +12,7 @@ export type TwitchBindings = {
 	CALLBACK_BASE_URL: string;
 	TWITCH_CLIENT_ID: string;
 	TWITCH_CLIENT_SECRET: { get(): Promise<string> };
-	TWITCH_EVENTSUB_SECRET: string;
+	TWITCH_EVENTSUB_SECRET: { get(): Promise<string> };
 };
 
 export type TwitchChannel = {
@@ -149,7 +149,8 @@ export async function createTwitchSubscription(
 	env: TwitchBindings,
 	broadcasterId: string,
 ) {
-	assertEventSubSecret(env.TWITCH_EVENTSUB_SECRET);
+	const secret = await env.TWITCH_EVENTSUB_SECRET.get();
+	assertEventSubSecret(secret);
 	const body = await apiJson<{ data?: EventSubSubscription[] }>(
 		env,
 		"/eventsub/subscriptions",
@@ -163,7 +164,7 @@ export async function createTwitchSubscription(
 				transport: {
 					method: "webhook",
 					callback: callbackUrl(env),
-					secret: env.TWITCH_EVENTSUB_SECRET,
+					secret,
 				},
 			}),
 		},
@@ -385,7 +386,8 @@ export async function handleTwitchWebhook(
 	request: Request,
 ): Promise<TwitchWebhookResult> {
 	const body = await request.text();
-	if (!(await verifyTwitchEvent(request, body, env.TWITCH_EVENTSUB_SECRET)))
+	const secret = await env.TWITCH_EVENTSUB_SECRET.get();
+	if (!(await verifyTwitchEvent(request, body, secret)))
 		return { status: 403, body: "invalid signature" };
 	let payload: EventSubEnvelope;
 	try {
