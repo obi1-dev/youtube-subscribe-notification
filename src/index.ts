@@ -3,8 +3,17 @@ import { Hono } from "hono";
 import { bearerAuth } from "hono/bearer-auth";
 import { logger } from "hono/logger";
 import { managePage } from "./manage.ts";
+import {
+	handleTwitchWebhook,
+	listTwitchChannels,
+	refreshTwitchSubscriptions,
+	subscribeTwitchChannel,
+	TWITCH_CALLBACK_PATH,
+	type TwitchBindings,
+	unsubscribeTwitchChannel,
+} from "./twitch.ts";
 
-type Bindings = {
+type Bindings = TwitchBindings & {
 	YT_SUBS: KVNamespace;
 	DISCORD_WEBHOOK_URL: string;
 	CALLBACK_BASE_URL: string;
@@ -65,6 +74,13 @@ app.post(CALLBACK_PATH, async (c) => {
 	for (const entry of entries) await handleFeedEntry(c.env, entry);
 
 	return c.text("OK", 200);
+});
+
+app.post(TWITCH_CALLBACK_PATH, async (c) => {
+	const result = await handleTwitchWebhook(c.env, c.req.raw);
+	return new Response(result.status === 204 ? null : result.body, {
+		status: result.status,
+	});
 });
 
 // ---------------------------------------------------------------------------
@@ -144,6 +160,10 @@ app.get("/manage/", async (c) => {
 		invalid: "正しいチャンネル ID を入力してください。",
 		failed:
 			"ハブへのリクエストに失敗しました。時間をおいて再度お試しください。",
+		twitch_added: "Twitch の購読リクエストを送信しました。",
+		twitch_removed: "Twitch の購読を解除しました。",
+		twitch_failed:
+			"Twitch の操作に失敗しました。入力と設定を確認してください。",
 	};
 	const status = c.req.query("status") ?? "";
 	c.header("Cache-Control", "no-store");
@@ -151,9 +171,39 @@ app.get("/manage/", async (c) => {
 		managePage(
 			channels,
 			messages[status],
-			status === "invalid" || status === "failed",
+			status === "invalid" || status === "failed" || status === "twitch_failed",
+			await listTwitchChannels(c.env),
 		),
 	);
+});
+
+app.post("/manage/twitch/:action", async (c) => {
+	if (c.req.header("Origin") !== new URL(c.req.url).origin)
+		return c.text("Forbidden", 403);
+	const action = c.req.param("action");
+	if (action !== "subscribe" && action !== "unsubscribe") return c.notFound();
+	const body = await c.req.parseBody();
+	try {
+		if (action === "subscribe") {
+			if (typeof body.login !== "string")
+				throw new Error("Missing Twitch login");
+			await subscribeTwitchChannel(c.env, body.login);
+		} else {
+			if (
+				typeof body.broadcasterId !== "string" ||
+				!/^\d+$/.test(body.broadcasterId)
+			)
+				throw new Error("Invalid Twitch broadcaster ID");
+			await unsubscribeTwitchChannel(c.env, body.broadcasterId);
+		}
+		return c.redirect(
+			`/manage/?status=${action === "subscribe" ? "twitch_added" : "twitch_removed"}`,
+			303,
+		);
+	} catch (error) {
+		console.error("[manage] Twitch request failed", error);
+		return c.redirect("/manage/?status=twitch_failed", 303);
+	}
 });
 
 app.post("/manage/:action", async (c) => {
@@ -547,6 +597,17 @@ export default {
 			[];
 		for (const channelId of list) {
 			ctx.waitUntil(subscribeChannel(env, channelId));
+		}
+		if (
+			env.TWITCH_CLIENT_ID &&
+			env.TWITCH_CLIENT_SECRET &&
+			env.TWITCH_EVENTSUB_SECRET
+		) {
+			ctx.waitUntil(
+				refreshTwitchSubscriptions(env).catch((error) =>
+					console.error("[twitch] reconciliation failed", error),
+				),
+			);
 		}
 	},
 };
