@@ -1,6 +1,6 @@
-# YouTube 通知
+# YouTube / Twitch 通知
 
-YouTube チャンネルの動画更新を Discord に通知する Cloudflare Worker です。
+YouTube チャンネルの動画更新と Twitch の配信開始を Discord に通知する Cloudflare Worker です。
 
 ## 管理画面と Access
 
@@ -25,3 +25,13 @@ pnpm deploy
 KV と `DISCORD_WEBHOOK_URL`、`CALLBACK_BASE_URL`、`HUB_SECRET`、`ADMIN_TOKEN` の各シークレットを環境に設定してください。`CALLBACK_BASE_URL` は末尾のスラッシュを除いた公開オリジンです。YouTube Data API v3 のキーは `wrangler.jsonc` で指定した Secrets Store の `YOUTUBE_DATA_API_KEY` から取得します。Secret には Workers スコープが必要です。
 
 通常動画の投稿、ライブ配信予定、ライブ配信開始を Discord に通知します。タイトルや説明の更新は通知しません。配信予定は1分ごとに確認するため、開始通知には遅延が生じる場合があります。YouTube のプッシュ通知や API の取得状況によっては検知できない場合もあります。チャンネルの購読更新は3時間ごとに行います。
+
+## Twitch の設定
+
+管理画面から Twitch のログイン名またはチャンネル URL を登録できます。配信開始を既存の Discord Webhook に通知します。登録した購読の確認には時間がかかる場合があります。
+
+`TWITCH_CLIENT_ID` は `wrangler.jsonc` に設定済みで、`TWITCH_CLIENT_SECRET` は同ファイルの Secrets Store バインディングから取得します。追加で `TWITCH_EVENTSUB_SECRET` を Worker のシークレットとして設定してください。10〜100文字のランダムな ASCII 文字列が必要です。例えば `openssl rand -hex 32` で生成し、`pnpm exec wrangler secret put TWITCH_EVENTSUB_SECRET` で安全に登録できます。値をログやソースに記録しないでください。
+
+`POST /webhook/twitch` は Twitch から HTTPS で到達できるようにし、Cloudflare Access の管理画面保護対象には含めないでください。EventSub のコールバック URL は `CALLBACK_BASE_URL` から作られます。購読の取消や通知失敗はログと管理画面で確認してください。シークレットの変更時は既存の EventSub 購読を作り直す必要があります。
+
+KV の結果整合性と Discord への送信後の障害により、同じ配信の通知が重複する可能性があります。Twitch または Discord の障害中に通知できない場合もあります。

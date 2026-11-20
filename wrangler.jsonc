@@ -6,6 +6,9 @@
 	"preview_urls": false,
 	"compatibility_date": "2026-08-19",
 	"compatibility_flags": ["nodejs_compat"],
+	"vars": {
+		"TWITCH_CLIENT_ID": "y30s5stqxlakvgifylu8zkifibequf"
+	},
 	"kv_namespaces": [
 		{
 			"binding": "YT_SUBS",
@@ -17,6 +20,11 @@
 			"binding": "YOUTUBE_DATA_API_KEY",
 			"store_id": "dd5dbc2750ac41b393d0e79928aae64a",
 			"secret_name": "YOUTUBE_DATA_API_KEY"
+		},
+		{
+			"binding": "TWITCH_CLIENT_SECRET",
+			"store_id": "dd5dbc2750ac41b393d0e79928aae64a",
+			"secret_name": "TWITCH_CLIENT_SECRET"
 		}
 	],
 	"triggers": {
