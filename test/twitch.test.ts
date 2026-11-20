@@ -29,7 +29,7 @@ function environment(kv: MemoryKv) {
 		YOUTUBE_DATA_API_KEY: { get: async () => "youtube-key" },
 		TWITCH_CLIENT_ID: "twitch-client-id",
 		TWITCH_CLIENT_SECRET: { get: async () => "twitch-client-secret" },
-		TWITCH_EVENTSUB_SECRET: "eventsub-test-secret",
+		TWITCH_EVENTSUB_SECRET: { get: async () => "eventsub-test-secret" },
 	};
 }
 

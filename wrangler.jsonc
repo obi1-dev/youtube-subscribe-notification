@@ -25,6 +25,11 @@
 			"binding": "TWITCH_CLIENT_SECRET",
 			"store_id": "dd5dbc2750ac41b393d0e79928aae64a",
 			"secret_name": "TWITCH_CLIENT_SECRET"
+		},
+		{
+			"binding": "TWITCH_EVENTSUB_SECRET",
+			"store_id": "dd5dbc2750ac41b393d0e79928aae64a",
+			"secret_name": "TWITCH_EVENTSUB_SECRET"
 		}
 	],
 	"triggers": {

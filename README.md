@@ -30,7 +30,7 @@ KV と `DISCORD_WEBHOOK_URL`、`CALLBACK_BASE_URL`、`HUB_SECRET`、`ADMIN_TOKEN
 
 管理画面から Twitch のログイン名またはチャンネル URL を登録できます。配信開始を既存の Discord Webhook に通知します。登録した購読の確認には時間がかかる場合があります。
 
-`TWITCH_CLIENT_ID` は `wrangler.jsonc` に設定済みで、`TWITCH_CLIENT_SECRET` は同ファイルの Secrets Store バインディングから取得します。追加で `TWITCH_EVENTSUB_SECRET` を Worker のシークレットとして設定してください。10〜100文字のランダムな ASCII 文字列が必要です。例えば `openssl rand -hex 32` で生成し、`pnpm exec wrangler secret put TWITCH_EVENTSUB_SECRET` で安全に登録できます。値をログやソースに記録しないでください。
+`TWITCH_CLIENT_ID` は `wrangler.jsonc` に設定済みで、`TWITCH_CLIENT_SECRET` と `TWITCH_EVENTSUB_SECRET` は同ファイルの Secrets Store バインディングから取得します。両方に Workers スコープが必要です。`TWITCH_EVENTSUB_SECRET` には10〜100文字のランダムな ASCII 文字列を設定してください。値をログやソースに記録しないでください。
 
 `POST /webhook/twitch` は Twitch から HTTPS で到達できるようにし、Cloudflare Access の管理画面保護対象には含めないでください。EventSub のコールバック URL は `CALLBACK_BASE_URL` から作られます。購読の取消や通知失敗はログと管理画面で確認してください。シークレットの変更時は既存の EventSub 購読を作り直す必要があります。
 
